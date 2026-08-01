@@ -157,6 +157,7 @@ function createCore(options = {}) {
     setField(s, 'terminalTty', f.terminalTty);
     setField(s, 'wtHwnd', f.wtHwnd);
     setField(s, 'wtSession', f.wtSession);
+    setField(s, 'wtTabRuntimeId', f.wtTabRuntimeId);
     setField(s, 'ghosttyTerminalId', f.ghosttyTerminalId);
     setField(s, 'originator', f.originator);
     setField(s, 'model', f.model);
@@ -334,6 +335,7 @@ function createCore(options = {}) {
       terminalTty: s.terminalTty || null,
       wtHwnd: s.wtHwnd || null,
       wtSession: s.wtSession || null,
+      wtTabRuntimeId: Array.isArray(s.wtTabRuntimeId) ? s.wtTabRuntimeId : null,
       ghosttyTerminalId: s.ghosttyTerminalId || null,
     };
   }

@@ -13,6 +13,7 @@ const {
 } = require('../backend/codex-hookinstall');
 const { buildBody, codexSuccessOutput } = require('../hook/octopus-hook');
 const { createCore } = require('../backend/core');
+const pidwalk = require('../backend/pidwalk');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'llmpet-codex-hooks-'));
 const hooksPath = path.join(tmp, 'hooks.json');
@@ -51,6 +52,19 @@ assert.strictEqual(second.skipped, CODEX_EVENTS.length, 'a current config must n
 assert.strictEqual(fs.readFileSync(hooksPath, 'utf8'), installed, 'idempotent install must not rewrite hooks.json');
 assert.strictEqual(codexHooksCurrent({ hooksPath, nodeBin, platform }), true);
 
+const realPidwalkResolve = pidwalk.resolve;
+const pidwalkCalls = [];
+pidwalk.resolve = (...args) => {
+  pidwalkCalls.push(args);
+  return {
+    sourcePid: 12,
+    pidChain: [12, 34],
+    wtSession: '977e6134-10f1-4487-b153-e6845b21716f',
+    wtHwnd: '123456',
+    wtTabRuntimeId: [42, -7, 9001],
+    headless: false,
+  };
+};
 const prompt = buildBody('UserPromptSubmit', {
   session_id: 'codex-session',
   cwd: 'C:\\work\\repo',
@@ -61,12 +75,17 @@ assert.strictEqual(prompt.agent_id, 'codex');
 assert.strictEqual(prompt.event_source, 'codex-hook');
 assert.strictEqual(prompt.state, 'thinking');
 assert.strictEqual(prompt.session_title, 'Fix the watcher');
+assert.strictEqual(prompt.wt_hwnd, '123456');
+assert.deepStrictEqual(prompt.wt_tab_runtime_id, [42, -7, 9001]);
+assert.strictEqual(pidwalkCalls[0][3].refreshWindowsTab, true);
 
 const tool = buildBody('PreToolUse', {
   session_id: 'codex-session',
   tool_name: 'apply_patch',
 }, 'codex');
 assert.strictEqual(tool.tool_name, 'Edit');
+assert.strictEqual(pidwalkCalls[1][3].refreshWindowsTab, false);
+pidwalk.resolve = realPidwalkResolve;
 
 const stop = buildBody('Stop', {
   session_id: 'codex-session',
