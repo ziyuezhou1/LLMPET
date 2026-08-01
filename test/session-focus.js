@@ -3,15 +3,20 @@
 const assert = require('assert');
 const childProcess = require('child_process');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const {
   activateWindowsTerminalTab,
-  activateWindowsTerminalTabElevated,
+  activateWindowsTerminalTabBroker,
   focusSessionTarget,
   normalizeWindowHandle,
   normalizeRuntimeId,
   hydrateWindowsTerminalTabRoute,
+  requestTerminalFocusBroker,
+  closeTerminalFocusBrokerChannel,
   WINDOWS_TERMINAL_HELPER,
+  WINDOWS_TERMINAL_BROKER,
+  WINDOWS_TERMINAL_BROKER_INSTALLER,
 } = require('../backend/focus');
 const {
   captureWindowsTerminalTabRoute,
@@ -126,24 +131,24 @@ async function main() {
   });
   assert.deepStrictEqual(result, { ok: false, route: 'failed', reason: 'tab-closed' });
 
-  let elevatedTarget = null;
+  let brokerTarget = null;
   result = await focusSessionTarget(SESSION, {
     platform: 'win32',
     exactFocus: async () => ({ ok: false, reason: 'elevation-required' }),
-    elevatedFocus: async (target) => {
-      elevatedTarget = target;
+    brokerFocus: async (target) => {
+      brokerTarget = target;
       return { ok: true };
     },
   });
-  assert.strictEqual(elevatedTarget, SESSION);
-  assert.deepStrictEqual(result, { ok: true, route: 'windows-terminal-tab-elevated' });
+  assert.strictEqual(brokerTarget, SESSION);
+  assert.deepStrictEqual(result, { ok: true, route: 'windows-terminal-tab-broker' });
 
   result = await focusSessionTarget(SESSION, {
     platform: 'win32',
     exactFocus: async () => ({ ok: false, reason: 'elevation-required' }),
-    elevatedFocus: async () => ({ ok: false, reason: 'elevation-denied' }),
+    brokerFocus: async () => ({ ok: false, reason: 'broker-unavailable' }),
   });
-  assert.deepStrictEqual(result, { ok: false, route: 'failed', reason: 'elevation-denied' });
+  assert.deepStrictEqual(result, { ok: false, route: 'failed', reason: 'broker-unavailable' });
 
   result = await focusSessionTarget(SESSION, {
     platform: 'darwin',
@@ -164,19 +169,20 @@ async function main() {
   assert(focusArgs.includes('-RuntimeId') && focusArgs.includes('42,-7,9001'));
   assert(!focusArgs.includes('-PidList') && !focusArgs.includes('-Marker'));
 
-  let elevatedArgs = null;
-  result = await activateWindowsTerminalTabElevated(SESSION, {
-    execFile: (_bin, args, _options, callback) => {
-      elevatedArgs = args;
-      callback(null, '{"ok":true,"reason":"focused-elevated"}\n', '');
+  let brokerPayload = null;
+  result = await activateWindowsTerminalTabBroker(SESSION, {
+    request: async (payload) => {
+      brokerPayload = payload;
+      return { ok: true };
     },
   });
   assert.deepStrictEqual(result, { ok: true });
-  assert(elevatedArgs.includes('-Command'));
-  const launcher = elevatedArgs[elevatedArgs.indexOf('-Command') + 1];
-  assert(launcher.includes('Start-Process') && launcher.includes('-Verb RunAs'));
-  assert(!/wt\.exe|new-tab|resume/.test(launcher),
-    'elevated focus may only run the fixed UI Automation helper');
+  assert.deepStrictEqual(brokerPayload, {
+    protocol: 1,
+    operation: 'focus-windows-terminal-tab',
+    windowHandle: '123456',
+    runtimeId: [42, -7, 9001],
+  });
 
   let captureOptions = null;
   const captured = captureWindowsTerminalTabRoute({
@@ -225,6 +231,8 @@ async function main() {
 
   const captureSource = fs.readFileSync(WT_TAB_CAPTURE_HELPER, 'utf8');
   const focusSource = fs.readFileSync(WINDOWS_TERMINAL_HELPER, 'utf8');
+  const brokerSource = fs.readFileSync(WINDOWS_TERMINAL_BROKER, 'utf8');
+  const brokerInstallerSource = fs.readFileSync(WINDOWS_TERMINAL_BROKER_INSTALLER, 'utf8');
   assert(captureSource.includes('GetForegroundWindow'));
   assert(captureSource.includes('SelectionItemPattern'));
   assert(captureSource.includes('IsSelected'));
@@ -237,8 +245,55 @@ async function main() {
   assert(focusSource.includes('elevation-required'));
   assert(!focusSource.includes('AttachConsole') && !focusSource.includes('SetConsoleTitle'),
     'click-time focus must not attach to or rename a console');
+  assert(brokerSource.includes('GetNamedPipeServerProcessId') && brokerSource.includes('$InstalledAppPath'));
+  assert(brokerSource.includes('Test-BrokerClient') && brokerSource.includes('Test-WindowsTerminalWindow'));
+  assert(brokerSource.includes("'..\\..\\..\\LLMPET.exe'"));
+  assert(brokerSource.includes("'focus-windows-terminal-tab'") && brokerSource.includes('operation-denied'));
+  assert(!/Invoke-Expression|Start-Process|wt\.exe|new-tab|resume/i.test(brokerSource),
+    'the elevated broker must not accept or launch arbitrary commands or terminals');
+  assert(brokerInstallerSource.includes('New-ScheduledTaskPrincipal'));
+  assert(brokerInstallerSource.includes('-RunLevel Highest'));
+  assert(brokerInstallerSource.includes('-LogonType Interactive'));
+  assert(!brokerInstallerSource.includes('ExpectedClientPath') && !brokerInstallerSource.includes('-PipeName'));
 
   if (process.platform === 'win32') {
+    const testPipePath = `\\\\.\\pipe\\LLMPET.TerminalFocus.Test.${process.pid}.${Date.now()}`;
+    const brokerRequest = requestTerminalFocusBroker(brokerPayload, {
+      pipePath: testPipePath,
+      timeoutMs: 1000,
+    });
+    const fakeBroker = await new Promise((resolve, reject) => {
+      const deadline = Date.now() + 1000;
+      const connect = () => {
+        const socket = net.createConnection(testPipePath, () => resolve(socket));
+        socket.once('error', (error) => {
+          socket.destroy();
+          if (Date.now() < deadline) setTimeout(connect, 20);
+          else reject(error);
+        });
+      };
+      connect();
+    });
+    await new Promise((resolve, reject) => {
+      let request = '';
+      fakeBroker.setEncoding('utf8');
+      fakeBroker.once('error', reject);
+      fakeBroker.on('data', (chunk) => {
+        request += chunk;
+        if (!/\r?\n/.test(request)) return;
+        const payload = JSON.parse(request.trim());
+        assert.strictEqual(payload.operation, 'focus-windows-terminal-tab');
+        fakeBroker.write('{"ok":true,"reason":"focused"}\n', resolve);
+      });
+    });
+    try {
+      const brokerResult = await brokerRequest;
+      assert.deepStrictEqual(brokerResult, { ok: true });
+    } finally {
+      fakeBroker.destroy();
+      closeTerminalFocusBrokerChannel(testPipePath);
+    }
+
     const captureParsed = childProcess.spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', WT_TAB_CAPTURE_HELPER, '-TimeoutMs', '250',
@@ -252,6 +307,37 @@ async function main() {
     ], { encoding: 'utf8', timeout: 5000, windowsHide: true });
     assert.strictEqual(focusParsed.status, 2, focusParsed.stderr);
     assert.strictEqual(JSON.parse(focusParsed.stdout.trim()).reason, 'invalid-arguments');
+
+    const brokerParsed = childProcess.spawnSync('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', WINDOWS_TERMINAL_BROKER, '-SelfTest',
+    ], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    assert.strictEqual(brokerParsed.status, 0, brokerParsed.stderr);
+    assert.strictEqual(JSON.parse(brokerParsed.stdout.trim()).reason, 'self-test-passed');
+
+    const reconnectPipeName = `LLMPET.TerminalFocus.Reconnect.${process.pid}.${Date.now()}`;
+    const reconnectPipePath = `\\\\.\\pipe\\${reconnectPipeName}`;
+    const brokerProcess = childProcess.spawn('powershell.exe', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-File', WINDOWS_TERMINAL_BROKER,
+      '-ExpectedClientPath', process.execPath,
+      '-PipeName', reconnectPipeName,
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const health = await requestTerminalFocusBroker({ protocol: 1, operation: 'health' }, {
+          pipePath: reconnectPipePath,
+          timeoutMs: 3000,
+        });
+        assert.deepStrictEqual(health, { ok: true });
+        closeTerminalFocusBrokerChannel(reconnectPipePath);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        assert.strictEqual(brokerProcess.exitCode, null,
+          'the broker must survive a desktop pet process disconnect and reconnect');
+      }
+    } finally {
+      brokerProcess.kill();
+    }
   }
 
   const backendFocusSource = fs.readFileSync(path.join(__dirname, '..', 'backend', 'focus.js'), 'utf8');
@@ -259,8 +345,19 @@ async function main() {
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert(!/resumeSession|resumed-tab|launchCliInRecentWindowsTerminal|wt\.exe/.test(backendFocusSource),
     'session click path must never resume a CLI or launch Windows Terminal');
+  assert(!/Start-Process[\s\S]*-Verb\s+RunAs/i.test(backendFocusSource),
+    'session clicks must never trigger a per-click UAC prompt');
   assert(preloadSource.includes("ipcRenderer.invoke('focus-session'"));
   assert(mainSource.includes("ipcMain.handle('focus-session'"));
+  assert(fs.readFileSync(path.join(__dirname, '..', 'renderer', 'pet.js'), 'utf8')
+    .includes('sess.focusBrokerUnavailable'));
+
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const installerSource = fs.readFileSync(path.join(__dirname, '..', 'assets', 'installer.nsh'), 'utf8');
+  assert.strictEqual(packageJson.build.nsis.perMachine, true,
+    'the installer must receive one-time elevation to register the broker safely');
+  assert.strictEqual(packageJson.build.nsis.include, 'assets/installer.nsh');
+  assert(installerSource.includes('customInstall') && installerSource.includes('customUnInstall'));
 
   console.log('session focus checks passed');
 }

@@ -203,6 +203,7 @@
     'sess.focusFailed': '没能切换到该标签，点击重试',
     'sess.focusInvalid': '该终端标签已关闭或失效',
     'sess.focusRouteMissing': '还没有标签定位信息；在该会话活动后重试',
+    'sess.focusBrokerUnavailable': '终端跳转助手未运行；请重新安装此版本',
 
     // ── meme picker ─────────────────────────────────────────────────────────
     'meme.entry': '🎭 表情包',
@@ -592,6 +593,7 @@
     'sess.focusFailed': 'Could not switch to that tab — click to retry',
     'sess.focusInvalid': 'That terminal tab is closed or no longer available',
     'sess.focusRouteMissing': 'No tab location yet — retry after activity in that session',
+    'sess.focusBrokerUnavailable': 'The terminal focus helper is not running — reinstall this version',
 
     'meme.entry': '🎭 Meme',
     'meme.entryTitle': 'Send a meme to this session',
@@ -973,6 +975,7 @@
     'sess.focusFailed': 'そのタブへ移動できません。クリックして再試行',
     'sess.focusInvalid': 'そのターミナルタブは閉じられたか無効です',
     'sess.focusRouteMissing': 'タブ位置が未取得です。そのセッションで操作した後に再試行してください',
+    'sess.focusBrokerUnavailable': 'ターミナル移動ヘルパーが起動していません。このバージョンを再インストールしてください',
 
     'meme.entry': '🎭 ミーム',
     'meme.entryTitle': 'このセッションにミームを送る',

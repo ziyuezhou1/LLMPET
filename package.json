@@ -1,6 +1,6 @@
 {
   "name": "llmpet",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "桌面宠物：实时呈现 Claude Code 与 OpenAI Codex 的状态、消息、用量和 Claude 授权",
   "main": "main.js",
   "license": "MIT",
@@ -45,8 +45,10 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": true,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "include": "assets/installer.nsh"
     }
   }
 }
