@@ -169,7 +169,7 @@ function createCodexRateLimits(deps = {}) {
     proc.stdout.on('data', consumeStdout);
     proc.on('spawn', () => {
       request('initialize', {
-        clientInfo: { name: 'llmpet', title: 'LLMPET', version: '1.1.3' },
+        clientInfo: { name: 'llmpet', title: 'LLMPET', version: '1.1.4' },
         capabilities: { optOutNotificationMethods: ['thread/started', 'item/agentMessage/delta'] },
       }, (_result, error) => {
         if (error) {
