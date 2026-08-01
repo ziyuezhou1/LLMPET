@@ -26,7 +26,7 @@ const { createPermissions } = require('./backend/permission');
 const { createServer } = require('./backend/server');
 const adapter = require('./backend/adapter');
 const hooks = require('./backend/hooks');
-const { focusSession } = require('./backend/focus');
+const { focusSession, focusSessionTarget } = require('./backend/focus');
 const { createTerritory, DEFAULT_RIVALS } = require('./backend/territory');
 const { launchClaude, launchCodex, findCli } = require('./backend/launch');
 const { createCodexWatch } = require('./backend/codex-watch');
@@ -98,6 +98,7 @@ let hookDrainActive = false;
 let appQuitting = false;
 let emitDebounce = null;
 const recentOps = []; // ring for the panel "操作流"; newest first, capped
+const pendingSessionFocus = new Map(); // session id → one in-flight focus/resume promise
 
 // ── frontend config shape ─────────────────────────────────────────────────────
 // agent: 'all'(单宠/面板) | 'claude' | 'codex' —— 双宠模式两只宠形象/位置各一套
@@ -924,8 +925,23 @@ function registerIpc() {
     }
     permissions.decide(permId, behavior);
   });
-  ipcMain.on('focus-session', (_e, sessionId) => {
-    focusSession(core.getSession(sessionId));
+  ipcMain.handle('focus-session', async (_e, sessionId) => {
+    if (!core || typeof sessionId !== 'string') {
+      return { ok: false, route: 'failed', reason: 'session-not-found' };
+    }
+    if (pendingSessionFocus.has(sessionId)) return pendingSessionFocus.get(sessionId);
+    const request = Promise.resolve()
+      .then(() => focusSessionTarget(core.getSession(sessionId)))
+      .catch((error) => {
+        log('focus', `focus session failed: ${error && error.message || error}`);
+        return { ok: false, route: 'failed', reason: 'focus-failed' };
+      });
+    pendingSessionFocus.set(sessionId, request);
+    try {
+      return await request;
+    } finally {
+      if (pendingSessionFocus.get(sessionId) === request) pendingSessionFocus.delete(sessionId);
+    }
   });
   ipcMain.handle('meme-catalog', () => publicCatalog(i18n.getLang()));
   ipcMain.handle('travel-get', () => (

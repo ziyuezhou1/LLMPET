@@ -164,7 +164,7 @@ function buildBody(event, p, source = 'claude') {
   if (memeResume) {
     body.headless = false;
     body.external_resume = true;
-  } else if (!isCodex && FOCUS_EVENTS.has(event)) {
+  } else if (FOCUS_EVENTS.has(event)) {
     try {
       const r = pidwalk.resolve(process.ppid, 10, sid);
       if (r.sourcePid) body.source_pid = r.sourcePid;
@@ -174,6 +174,7 @@ function buildBody(event, p, source = 'claude') {
       if (r.tmuxClient) body.tmux_client = r.tmuxClient;
       if (r.terminalApp) body.terminal_app = r.terminalApp;
       if (r.terminalTty) body.terminal_tty = r.terminalTty;
+      if (r.wtSession) body.wt_session = r.wtSession;
       body.headless = r.headless === true; // background `claude -p` runs
     } catch {}
   }
